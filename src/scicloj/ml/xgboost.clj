@@ -199,26 +199,33 @@ subsample may be set to as low as 0.1 without loss of model accuracy. Note that 
 (defn- dataset->labeled-point-iterator
   "Create an iterator to labeled points from a possibly quite large
   sequence of maps.  Sets expected length to length of first entry"
-  ^Iterable [feature-ds target-ds]
+  ^Iterable [feature-ds target-ds weight-ds]
   (let [feature-tens (ds-tens/dataset->tensor feature-ds :float32)
         target-tens (when target-ds
-                      (ds-tens/dataset->tensor target-ds :float32))]
+                      (ds-tens/dataset->tensor target-ds :float32))
+        weight-tens (when weight-ds
+                      (ds-tens/dataset->tensor weight-ds :float32))]
     (errors/when-not-errorf
      (or (not target-ds)
          (== 1 (ds/column-count target-ds)))
      "Multi-column regression/classification is not supported.  Target ds has %d columns"
      (ds/column-count target-ds))
-    (map (fn [features target]
-           (LabeledPoint. (float target) (first (dtype/shape features))  nil (dtype/->float-array features)))
-         feature-tens (or (when target-tens (dtype/->reader target-tens))
-                          (repeat (float 0.0))))))
+    (map (fn [features target weight]
+           (LabeledPoint. (float target) (first (dtype/shape features))  nil (dtype/->float-array features) (float weight) -1 Float/NaN))
+         feature-tens
+         (or (when target-tens (dtype/->reader target-tens))
+             (repeat (float 0.0)))
+         (or (when weight-tens (dtype/->reader weight-tens))
+             (repeat (float 1.0))))))
 
 (defn- dataset->dmatrix
   "Dataset is a sequence of maps.  Each contains a feature key.
   Returns a dmatrix."
-  (^DMatrix [feature-ds target-ds]
-   (DMatrix. (.iterator (dataset->labeled-point-iterator feature-ds target-ds))
+  (^DMatrix [feature-ds target-ds weight-ds]
+   (DMatrix. (.iterator (dataset->labeled-point-iterator feature-ds target-ds weight-ds))
              nil))
+  (^DMatrix [feature-ds target-ds]
+   (dataset->dmatrix feature-ds target-ds nil))
   (^DMatrix [feature-ds]
    (dataset->dmatrix feature-ds nil)))
 
@@ -247,10 +254,10 @@ subsample may be set to as low as 0.1 without loss of model accuracy. Note that 
    :round (ml-gs/linear 5 46 5 :int64)
    :alpha (ml-gs/linear 0.01 0.31 30)})
 
-(defn ->dmatrix [feature-ds target-ds sparse-column n-sparse-columns]
+(defn ->dmatrix ^DMatrix [feature-ds target-ds sparse-column n-sparse-columns weight-ds]
   (if sparse-column
     (sparse-feature->dmatrix feature-ds target-ds sparse-column n-sparse-columns)
-    (dataset->dmatrix feature-ds target-ds)))
+    (dataset->dmatrix feature-ds target-ds weight-ds)))
 
 (defn- train
   [feature-ds label-ds options]
@@ -259,7 +266,9 @@ subsample may be set to as low as 0.1 without loss of model accuracy. Note that 
   (locking #'multiclass-objective?
     (let [objective (options->objective options)
           sparse-column-or-nil (:sparse-column options)
-          train-dmat (->dmatrix feature-ds label-ds sparse-column-or-nil (:n-sparse-columns options))
+          train-dmat (->dmatrix feature-ds label-ds sparse-column-or-nil
+                                (:n-sparse-columns options)
+                                (:sample-weights options))
           base-watches (or (:watches options) {})
           feature-cnames (ds/column-names feature-ds)
           target-cnames (ds/column-names label-ds)
@@ -270,7 +279,8 @@ subsample may be set to as low as 0.1 without loss of model accuracy. Note that 
                                         (ds/select-columns v feature-cnames)
                                         (ds/select-columns v target-cnames)
                                         sparse-column-or-nil
-                                        (:n-sparse-columns options)))
+                                        (:n-sparse-columns options)
+                                        (:sample-weights options)))
                                  watches)
                                ;;Linked hash map to preserve order
                                (LinkedHashMap.)))
@@ -304,7 +314,7 @@ c/xgboost4j/java/XGBoost.java#L208"))
                               :scale-pos-weight 1.0
                               :subsample 0.87
                               :silent 1}
-                              
+
                              options
                              (when label-map
                                {:num-class (count label-map)}))
@@ -348,7 +358,7 @@ c/xgboost4j/java/XGBoost.java#L208"))
 (defn- predict
   [feature-ds thawed-model {:keys [target-columns target-categorical-maps options]}]
   (let [sparse-column-or-nil (:sparse-column options)
-        dmatrix (->dmatrix feature-ds nil sparse-column-or-nil (:n-sparse-columns options))
+        dmatrix (->dmatrix feature-ds nil sparse-column-or-nil (:n-sparse-columns options) nil)
         prediction (.predict ^Booster thawed-model dmatrix)
         predict-tensor (->> prediction
                             (dtt/->tensor))
@@ -368,7 +378,7 @@ c/xgboost4j/java/XGBoost.java#L208"))
                          #(vary-meta % assoc :column-type :prediction)))
       (model/finalize-regression predict-tensor target-cname))))
 
-    
+
 
 
 (defn- explain
@@ -408,11 +418,11 @@ c/xgboost4j/java/XGBoost.java#L208"))
 (doseq [objective (concat [:regression :classification]
                           (keys objective-types))]
   (let [reg-def (get objective-types objective)
-        model-meta 
+        model-meta
         {:thaw-fn thaw-model
          :explain-fn explain
-         
-         
+
+
          :hyperparameters hyperparameters
          :documentation {:javadoc "https://xgboost.readthedocs.io/en/latest/jvm/javadocs/index.html"
                          :user-guide "https://xgboost.readthedocs.io/en/latest/jvm/index.html"}}
@@ -423,11 +433,11 @@ c/xgboost4j/java/XGBoost.java#L208"))
     ;; (println :reg-def reg-def)
     ;; (println :options (:options reg-def))
     (ml/define-model! (keyword "xgboost" (name objective))
-      
+
       train predict model-meta)))
 
 
- 
+
 (comment
   (require '[tech.v3.dataset.column-filters :as cf])
   (def src-ds (ds/->dataset "test/data/iris.csv"))
@@ -496,6 +506,3 @@ c/xgboost4j/java/XGBoost.java#L208"))
          (take 10)
          (map #(select-keys % [:loss :options])))))
   ;;consistently gets .849 or so accuracy on best models.
-  
-
-
