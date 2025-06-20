@@ -5,6 +5,7 @@
 - Support custom sample-weights (by @rschmukler)
 - Support custom objective function (by @rschmukler)
 - Support custom evaluation metric function (by @rschmukler)
+- fix missing scicloj.ml.smile dep
 
 ## 6.3.0
 - options as malli

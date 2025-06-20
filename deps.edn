@@ -3,8 +3,9 @@
  {org.clojure/clojure               {:mvn/version "1.12.0"}
   ml.dmlc/xgboost4j_2.12            {:mvn/version "2.1.1"}
   org.scicloj/metamorph.ml          {:mvn/version "1.0"}
+  org.scicloj/scicloj.ml.smile      {:mvn/version "7.5.0"}
 
-  
+
 
   org.apache.hadoop/hadoop-common   {:mvn/version "3.3.0"
                                      :exclusions [org.apache.commons/commons-math3
@@ -30,6 +31,4 @@
            :test {:extra-paths ["test"]
 
                   :extra-deps {
-                               org.scicloj/scicloj.ml.smile {:mvn/version "7.5.0"}
                                lambdaisland/kaocha {:mvn/version "1.60.945"}}}}}
-                  
